@@ -11,7 +11,7 @@ class Tracer:
     '''
     class to implement configurable tracing
     '''
-    def __init__(self, target_path, runner_path, astree=None, cassette_path=None, step=False,
+    def __init__(self, paths, tree_fn, cassette_path=None, step=False,
                  config_path='./config.py'):
         '''
         There needs to be a better understanding of the
@@ -21,18 +21,15 @@ class Tracer:
         e.g. creates objects etc.
 
         Args:
-            target_path: the module to trace
-            runner_path: the module that triggers the flow.
+            paths: a list of modules to trace
+            tree_fn: callable, given module path returns `NodeIndexer`
             step: whether to step through execution i.e. prompt
-            asttree: ast module node for module being analyzed
             cassette_path: location where cassette is recorded
             config_path: location of config file (abs or rel)
         '''
-        self.target_path = target_path
-        self.runner_path = runner_path
+        self.paths = paths
+        self.tree_fn = tree_fn
         self.step = step
-        self.astree = astree
-
         self.config = load_module(to_abspath(config_path))
         self.cassette = self.init_cassette(cassette_path)
 
@@ -68,6 +65,7 @@ class Tracer:
         '''
         record a `frame` to file
         '''
+        print(frame)
         self.cassette.write(f'{frame}\n')
 
     def tracer(self, frame, event, arg):
@@ -77,24 +75,24 @@ class Tracer:
         '''
         filepath = frame.f_code.co_filename
         # print(filepath)
-        if filepath != self.target_path and filepath != self.runner_path:
+        if filepath not in self.paths:
             # skip files not matching target/runner module
             return self
 
         lineno = frame.f_lineno
         desc = f'fpath={filepath} lineno={lineno} event={event}'
-        print(desc)
         self.record(desc)
 
+        astree = self.tree_fn(filepath)
         if event == 'line':
             # get names defined in current scope in previous line
             # since the object itself will only be
             # accessible in this call
-            names = self.astree.prev_unresolved(lineno)
+            names = astree.prev_unresolved(lineno)
             for name in names:
                 resolved = self._resolve_name(name, frame)
                 # output the name and the resolved variable
-                print(f'Var {name} : {resolved}')
+                self.record(f'Var {name} : {resolved}')
 
         # prompt user to proceed
         if self.step:
