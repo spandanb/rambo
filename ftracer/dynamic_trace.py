@@ -4,8 +4,29 @@ contains configurable tracing class
 import os
 import os.path
 
+from collections import namedtuple
+from typing import types
 from .utils import to_abspath, load_module
 
+NameValuePair = namedtuple('NameValuePair', 'name value')
+
+'''
+NOTE(caching):
+python caches certain objects, e.g.
+small ints and strings defined at compile
+time. but the exact behavior, even for ints
+is not very clear.
+
+this might become an issue when you define a
+flow that acccess a cached object, and you assume
+you are referring to a previously defined object.
+which could imply a connection between two different blocks
+of code where none exists.
+
+see:
+https://medium.com/@bdov_/https-medium-com-bdov-python-objects-part-iii-string-interning-625d3c7319de
+https://wsvincent.com/python-wat-integer-cache/
+'''
 
 class Tracer:
     '''
@@ -30,7 +51,8 @@ class Tracer:
         # config object
         self.config = load_module(to_abspath(config_path))
         self.cassette = self.init_cassette(cassette_path)
-        # objects being tracked/viewed and to be serialized
+        # id(int) -> object; objects being tracked/viewed
+        # and to be serialized
         # we need to track it to avoid duplicate serialization
         self.objects = {}
         # to avoid recording duplicate resolved names
@@ -65,42 +87,58 @@ class Tracer:
         else:
             raise ValueError(f'Unknown name: {name}')
 
-    def record(self, filepath:str, lineno:int, event:str):
+    def record_event(self, filepath:str, lineno:int, event):
         '''
-        record a `event` (currently a string) to file
+        record a `event` to file
         '''
         print(f'fpath={filepath} lineno={lineno} event={event}')
         #self.cassette.write(f'{event}\n')
+
+    def record(self, filepath:str, lineno:int, frame:types.FrameType):
+        '''
+        check whether something interesting happened,
+        e.g. obj creation, and if it's a non-duplicate
+        event, record it.
+        '''
+        # get names defined in current scope in previous line
+        # since the object itself will only be
+        # accessible in this call
+        astree = self.tree_fn(filepath)
+        lno_names = astree.prev_lno_names(lineno)
+        if (filepath, lno_names.lineno) not in self.resolved:
+            for name in lno_names.names:
+                value = self._resolve_name(name, frame)
+                # python will cache certain objects
+                # which could cause issues with how the flow is recorded
+                # see NOTE(caching)
+                oid = id(value)
+                # first time seeing this object
+                if not self.objects.get(oid):
+                    event = f'Name {name} : {value}'
+                    self.record_event(filepath, lineno, event)
+                    self.objects[oid] = value
+                else:
+                    pass
+            # to avoid duplicate resolves
+            self.resolved.add((filepath, lno_names.lineno))
 
     def tracer(self, frame, event, arg):
         '''
         output variable name and object as it
         traces through a flow.
+
+        this function is getting fat
         '''
         filepath = frame.f_code.co_filename
-        # print(filepath)
         if filepath not in self.paths:
             # skip files not matching target/runner module
             return self
 
         lineno = frame.f_lineno
-        self.record(filepath, lineno, event)
+        # print(f'fpath={filepath} lineno={lineno} event={event}')
 
-        astree = self.tree_fn(filepath)
         if event == 'line' or event == 'return':
-            # get names defined in current scope in previous line
-            # since the object itself will only be
-            # accessible in this call
-            # TODO: ensure var is only printed once
-            lno_names = astree.prev_lno_names(lineno)
-            if (filepath, lno_names.lineno) not in self.resolved:
-                for name in lno_names.names:
-                    value = self._resolve_name(name, frame)
-                    # output the name and the resolved value
-                    event = f'Name {name} : {value}'
-                    self.record(filepath, lineno, event)
-
-                self.resolved.add((filepath, lno_names.lineno))
+            self.record(filepath, lineno, frame)
 
         # prompt user to proceed
         # TODO: remove; this is a leftover from when recording
