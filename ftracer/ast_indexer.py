@@ -6,6 +6,7 @@ their child variables
 import ast
 import functools
 
+from collections import namedtuple
 from sortedcontainers import SortedList
 from .custom_types import NORangeTree, Stack
 from .utils import realpath
@@ -68,6 +69,10 @@ class NameLinenoPair:
         return self.__str__()
 
 
+# result type when resolving names in previous line
+LinenoNames = namedtuple('LinenoNames', 'lineno names')
+
+
 class LSNode(WNode):
     '''
     [L]exical[S]scope node.
@@ -91,7 +96,7 @@ class LSNode(WNode):
     def add_rhs_child(self, childname, child):
         self.rhs_children[childname] = child
 
-    def names_before(self, lineno) -> list:
+    def prev_lno_names(self, lineno) -> LinenoNames:
         '''
         find all names in the last line
         before `lineno`
@@ -99,23 +104,25 @@ class LSNode(WNode):
         Would this be better solved with a node
         iterator/more cohesive redesign of
         the classes/interfaces?
+        is this question even well defined with
+        the current approach of recording
         '''
         name_idx = self.lno_idx.bisect_left(NameLinenoPair(lineno, '')) - 1
         if name_idx < 0:
-            return []
+            return LinenoNames(-1, [])
         # get all vars on queried lno
         query_lno = self.lno_idx[name_idx].lineno
-        result = []
+        names = []
         while name_idx >= 0:
             name = self.lno_idx[name_idx].name
-            result.append(name)
+            names.append(name)
             # look left
             name_idx -= 1
             # break if we are out of the array or at a previous lineno
             if name_idx < 0 or self.lno_idx[name_idx].lineno != query_lno:
                 break
 
-        return result
+        return LinenoNames(query_lno, names)
 
 
 class NodeIndexer(ast.NodeVisitor):
@@ -138,7 +145,7 @@ class NodeIndexer(ast.NodeVisitor):
         # TODO: allow searching for a name?
         super().__init__()
 
-    def prev_unresolved(self, lineno):
+    def prev_lno_names(self, lineno)->LinenoNames:
         '''
         get all var names referenced in the last line
         before lineno.
@@ -149,8 +156,7 @@ class NodeIndexer(ast.NodeVisitor):
         scopes = self.scope_range.get_scope_stack(lineno)
         # containing scope (LSNode)
         cont_scope = scopes.top().value
-        names = cont_scope.names_before(lineno)
-        return names
+        return cont_scope.prev_lno_names(lineno)
 
     def push_scope(self, name:str, node: LSNode):
         '''
