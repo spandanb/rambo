@@ -7,6 +7,7 @@ import os.path
 from collections import namedtuple
 from typing import types
 from .utils import to_abspath, load_module
+from . import tape_utils as tu
 
 NameValuePair = namedtuple('NameValuePair', 'name value')
 
@@ -28,12 +29,13 @@ https://medium.com/@bdov_/https-medium-com-bdov-python-objects-part-iii-string-i
 https://wsvincent.com/python-wat-integer-cache/
 '''
 
+
 class Tracer:
     '''
     implements configurable flow recording
+    TODO: rename to recorder
     '''
-    def __init__(self, paths, tree_fn, cassette_path=None, step=False,
-                 config_path='./config.py'):
+    def __init__(self, paths, tree_fn, cassette_path=None, config_path='./config.py'):
         '''
         the tracer will need to track objects seens and events observed.
 
@@ -41,13 +43,11 @@ class Tracer:
             paths: a list of modules to trace
             tree_fn: callable, given module path returns `NodeIndexer`.
                 this enables lazy access
-            step: whether to step through execution i.e. prompt
             cassette_path: location where cassette is recorded
             config_path: location of config file (abs or rel)
         '''
         self.paths = paths
         self.tree_fn = tree_fn
-        self.step = step
         # config object
         self.config = load_module(to_abspath(config_path))
         self.cassette = self.init_cassette(cassette_path)
@@ -66,8 +66,8 @@ class Tracer:
         '''
         if cassette_path is None:
             cdir = to_abspath(self.config.cassettes_dir)
-            cassette_path = os.path.join(cdir, 'A.tape')
-        return open(cassette_path, 'w')
+            cassette_path = os.path.join(cdir, 'A.avro')
+        return open(cassette_path, 'wb')
 
     def __call__(self, frame, event, arg):
         return self.tracer(frame, event, arg)
@@ -92,6 +92,7 @@ class Tracer:
         record a `event` to file
         '''
         print(f'fpath={filepath} lineno={lineno} event={event}')
+        tu.append_record(self.cassette, filepath, lineno, event)
         #self.cassette.write(f'{event}\n')
 
     def record(self, filepath:str, lineno:int, frame:types.FrameType):
@@ -114,7 +115,10 @@ class Tracer:
                 oid = id(value)
                 # first time seeing this object
                 if not self.objects.get(oid):
-                    event = f'Name {name} : {value}'
+                    # TODO: handle new object created and name
+                    # assigned separately
+                    # event = f'Name {name} : {value}'
+                    event = tu.ObjectCreated(value)
                     self.record_event(filepath, lineno, event)
                     self.objects[oid] = value
                 else:
@@ -140,11 +144,6 @@ class Tracer:
         if event == 'line' or event == 'return':
             self.record(filepath, lineno, frame)
 
-        # prompt user to proceed
-        # TODO: remove; this is a leftover from when recording
-        # and tracing were not separate
-        if self.step:
-            input('step? ')
-
+        # input('step? ')
         print('-'*40)
         return self
